@@ -1,9 +1,8 @@
-# BIGD-FP
+# Final Project Big Data & Data Lakehouse
 
-# Laporan Temuan Topik/Masalah  
-## Final Project Big Data & Data Lakehouse
+## Laporan Pengerjaan Final Project
 
-## Anggota Kelompok:
+### Anggota Kelompok:
 |             Nama              |     NRP    |
 |-------------------------------|------------|
 | M Abhinaya Al Faruqi        | 5027231011 |
