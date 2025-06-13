@@ -30,6 +30,9 @@ Untuk mensimulasikan pengelolaan data skala besar seperti Steam, kami menggunaka
 - **Flask:** Sebagai REST API untuk expose hasil data yang sudah diproses.
 - **Streamlit:** Untuk visualisasi dashboard insight dan hasil analitik secara interaktif.
 
+![Screenshot 2025-06-13 091348](https://github.com/user-attachments/assets/03d0a6ff-294d-40a5-8229-ea9b6f39b560)
+
+
 ---
 
 ### 3. Tantangan yang Dihadapi Industri
