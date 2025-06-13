@@ -1,6 +1,6 @@
 # Final Project Big Data & Data Lakehouse
 
-## Laporan Pengerjaan Final Project
+## Laporan Pengerjaan
 
 ### Anggota Kelompok:
 |             Nama              |     NRP    |
@@ -11,7 +11,8 @@
 | Gandhi Ert Julio     | 5027231081 |
 *** 
 
-## Pengelolaan Data & Permasalahan Industri Game Digital: Studi Kasus Steam
+## Overview
+### Pengelolaan Data & Permasalahan Industri Game Digital: Studi Kasus Steam
 
 ### 1. Pengelolaan Data di Industri Game Digital (Steam)
 Steam adalah layanan distribusi game digital terbesar di dunia dengan lebih dari 130 juta pengguna aktif bulanan dan katalog puluhan ribu game. Data yang dikelola sangat besar dan berasal dari berbagai sumber, seperti:
