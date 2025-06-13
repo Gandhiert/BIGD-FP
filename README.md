@@ -44,7 +44,7 @@ Kolom:
 `reviews`
 ***
 
-### Pengelolaan Data & Permasalahan Industri Game Digital: Studi Kasus Steam
+## Olah Data & Permasalahan Industri Game Digital: Studi Kasus Steam
 
 ### 1. Pengelolaan Data di Industri Game Digital (Steam)
 Steam adalah layanan distribusi game digital terbesar di dunia dengan lebih dari 130 juta pengguna aktif bulanan dan katalog puluhan ribu game. Data yang dikelola sangat besar dan berasal dari berbagai sumber, seperti:
