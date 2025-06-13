@@ -11,7 +11,39 @@
 | Gandhi Ert Julio     | 5027231081 |
 *** 
 
-## Overview
+### Overview Dataset
+Dataset ini ditujukan untuk eksplorasi dan pembangunan sistem rekomendasi berbasis data interaksi pengguna dengan game di platform Steam.
+
+Content:
+- recommendations.csv
+Isi: >41 juta entri interaksi pengguna dengan game (rekomendasi/review).
+
+Kolom:
+`user_id`
+`app_id`
+`date`
+etc
+***
+
+- games.csv
+Isi: Berisi metadata game berupa judul, genre, deskripsi, developer, dsb.
+
+Kolom:
+`app_id`
+`title`
+`date_release`
+etc
+***
+
+- users.csv
+Isi: Berisi informasi publik profil pengguna seperti jumlah produk yang dibeli dan ulasan yang dipublikasikan.
+
+Kolom:
+`user_id`
+`products`
+`reviews`
+***
+
 ### Pengelolaan Data & Permasalahan Industri Game Digital: Studi Kasus Steam
 
 ### 1. Pengelolaan Data di Industri Game Digital (Steam)
