@@ -1,14 +1,16 @@
 # BIGD-FP
 
 # Laporan Temuan Topik/Masalah  
-## Final Project Big Data & Data Lakehouse  
-**Kelompok 8**  
-- M Abhinaya Al Faruqi (5027231011)  
-- Muhamad Rizq Taufan (5027231021)  
-- Gandhi Ert Julio (5027231081)  
-- Danar Bagus Rasendriya (5027231055)  
+## Final Project Big Data & Data Lakehouse
 
----
+## Anggota Kelompok:
+|             Nama              |     NRP    |
+|-------------------------------|------------|
+| M Abhinaya Al Faruqi        | 5027231011 |
+| Muhamad Rizq Taufan          | 5027231021 |
+| Danar Bagus Rasendriya     | 5027231055 |
+| Gandhi Ert Julio     | 5027231081 |
+*** 
 
 ## Pengelolaan Data & Permasalahan Industri Game Digital: Studi Kasus Steam
 
