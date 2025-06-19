@@ -2,6 +2,7 @@
 /generated_data/
 /data_lake/raw/
 /data_lake/warehouse/
+/data_lake/logs/
 
 
 *.csv

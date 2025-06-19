@@ -1,0 +1,31 @@
+{
+  "encryption": {
+    "enabled": true,
+    "algorithm": "AES-256",
+    "key_rotation_days": 90
+  },
+  "access_control": {
+    "default_policy": "deny",
+    "roles": {
+      "admin": [
+        "read",
+        "write",
+        "delete"
+      ],
+      "analyst": [
+        "read"
+      ],
+      "viewer": [
+        "read"
+      ]
+    }
+  },
+  "audit": {
+    "log_all_access": true,
+    "retention_days": 365
+  },
+  "compliance": {
+    "gdpr_enabled": true,
+    "data_retention_days": 2555
+  }
+}

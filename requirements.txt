@@ -1,0 +1,41 @@
+# Data processing
+pandas>=2.1.0
+numpy>=1.25.0
+pyarrow>=13.0.0
+
+# MinIO client
+minio>=7.2.0
+
+# Database & Analytics
+duckdb>=0.9.0
+
+# Web framework & API
+flask>=3.0.0
+flask-cors>=4.0.0
+
+# Dashboard & Visualization
+streamlit>=1.28.0
+plotly>=5.17.0
+requests>=2.31.0
+
+# Data generation
+faker>=20.0.0
+pyyaml>=6.0.1
+
+# File processing
+lxml>=4.9.3
+
+# NLP and Sentiment Analysis
+textblob>=0.17.1
+vaderSentiment>=3.3.2
+nltk>=3.8.1
+scikit-learn>=1.3.0
+transformers>=4.30.0
+torch>=2.0.0
+
+# Orchestration & Scheduling
+schedule>=1.2.0
+croniter>=1.4.1
+
+# Data Governance & Security
+sqlalchemy>=2.0.0 

@@ -1,6 +1,23 @@
-version: '3'
+version: '3.8'
+
+networks:
+  lakehouse_network:
+    driver: bridge
+
+volumes:
+  minio_data:
+    driver: local
+  zookeeper_data:
+    driver: local
+  kafka_data:
+    driver: local
+  spark_warehouse:
+    driver: local
 
 services:
+  # =====================================
+  # STORAGE LAYER - MinIO
+  # =====================================
   minio:
     image: minio/minio:latest
     command: server /data --console-address ":9001"
@@ -8,18 +25,205 @@ services:
       - '9000:9000'
       - '9001:9001'
     networks:
-      - minionetwork
+      - lakehouse_network
     volumes:
       - 'minio_data:/data'
     environment:
       - MINIO_ROOT_USER=minioadmin
       - MINIO_ROOT_PASSWORD=minioadmin
-      - MINIO_DEFAULT_BUCKETS=raw-zone,warehouse-zone
+      - MINIO_DEFAULT_BUCKETS=raw-zone,warehouse-zone,streaming-zone
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 30s
+      timeout: 20s
+      retries: 3
 
-networks:
-  minionetwork:
-    driver: bridge
+  # =====================================
+  # STREAMING LAYER - Apache Kafka
+  # =====================================
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.4.0
+    hostname: zookeeper
+    container_name: zookeeper
+    ports:
+      - "2181:2181"
+    networks:
+      - lakehouse_network
+    volumes:
+      - zookeeper_data:/var/lib/zookeeper/data
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+    healthcheck:
+      test: echo srvr | nc zookeeper 2181 || exit 1
+      retries: 20
+      interval: 10s
 
-volumes:
-  minio_data:
-    driver: local
+  kafka:
+    image: confluentinc/cp-kafka:7.4.0
+    hostname: kafka
+    container_name: kafka
+    depends_on:
+      zookeeper:
+        condition: service_healthy
+    ports:
+      - "9092:9092"
+      - "9101:9101"
+    networks:
+      - lakehouse_network
+    volumes:
+      - kafka_data:/var/lib/kafka/data
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: 'zookeeper:2181'
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:29092,PLAINTEXT_HOST://localhost:9092
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_JMX_PORT: 9101
+      KAFKA_JMX_HOSTNAME: localhost
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: 'true'
+      KAFKA_DELETE_TOPIC_ENABLE: 'true'
+    healthcheck:
+      test: kafka-broker-api-versions --bootstrap-server kafka:29092
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  # Kafka Schema Registry (optional but recommended)
+  schema-registry:
+    image: confluentinc/cp-schema-registry:7.4.0
+    hostname: schema-registry
+    container_name: schema-registry
+    depends_on:
+      kafka:
+        condition: service_healthy
+    ports:
+      - "8081:8081"
+    networks:
+      - lakehouse_network
+    environment:
+      SCHEMA_REGISTRY_HOST_NAME: schema-registry
+      SCHEMA_REGISTRY_KAFKASTORE_BOOTSTRAP_SERVERS: 'kafka:29092'
+      SCHEMA_REGISTRY_LISTENERS: http://0.0.0.0:8081
+
+  # Kafka Control Center (Web UI for Kafka)
+  control-center:
+    image: confluentinc/cp-enterprise-control-center:7.4.0
+    hostname: control-center
+    container_name: control-center
+    depends_on:
+      kafka:
+        condition: service_healthy
+      schema-registry:
+        condition: service_started
+    ports:
+      - "9021:9021"
+    networks:
+      - lakehouse_network
+    environment:
+      CONTROL_CENTER_BOOTSTRAP_SERVERS: 'kafka:29092'
+      CONTROL_CENTER_SCHEMA_REGISTRY_URL: "http://schema-registry:8081"
+      CONTROL_CENTER_REPLICATION_FACTOR: 1
+      CONTROL_CENTER_INTERNAL_TOPICS_PARTITIONS: 1
+      CONTROL_CENTER_MONITORING_INTERCEPTOR_TOPIC_PARTITIONS: 1
+      CONFLUENT_METRICS_TOPIC_REPLICATION: 1
+      PORT: 9021
+
+  # =====================================
+  # BIG DATA PROCESSING - Apache Spark
+  # =====================================
+  spark-master:
+    image: bitnami/spark:3.5
+    hostname: spark-master
+    container_name: spark-master
+    ports:
+      - "8080:8080"   # Spark Master Web UI
+      - "7077:7077"   # Spark Master Port
+    networks:
+      - lakehouse_network
+    volumes:
+      - spark_warehouse:/opt/spark/warehouse
+      - ./data_lake/spark_jobs:/opt/spark/jobs
+      - ./data_lake/warehouse:/opt/spark/warehouse_data
+    environment:
+      - SPARK_MODE=master
+      - SPARK_MASTER_HOST=spark-master
+      - SPARK_MASTER_PORT_NUMBER=7077
+      - SPARK_MASTER_WEBUI_PORT=8080
+      - SPARK_WAREHOUSE_DIR=/opt/spark/warehouse
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  spark-worker-1:
+    image: bitnami/spark:3.5
+    hostname: spark-worker-1
+    container_name: spark-worker-1
+    depends_on:
+      spark-master:
+        condition: service_healthy
+    ports:
+      - "8081:8081"   # Worker Web UI
+    networks:
+      - lakehouse_network
+    volumes:
+      - spark_warehouse:/opt/spark/warehouse
+      - ./data_lake/spark_jobs:/opt/spark/jobs
+      - ./data_lake/warehouse:/opt/spark/warehouse_data
+    environment:
+      - SPARK_MODE=worker
+      - SPARK_MASTER_URL=spark://spark-master:7077
+      - SPARK_WORKER_WEBUI_PORT=8081
+      - SPARK_WORKER_MEMORY=2g
+      - SPARK_WORKER_CORES=2
+      - SPARK_WAREHOUSE_DIR=/opt/spark/warehouse
+
+  spark-worker-2:
+    image: bitnami/spark:3.5
+    hostname: spark-worker-2
+    container_name: spark-worker-2
+    depends_on:
+      spark-master:
+        condition: service_healthy
+    ports:
+      - "8082:8082"   # Worker Web UI
+    networks:
+      - lakehouse_network
+    volumes:
+      - spark_warehouse:/opt/spark/warehouse
+      - ./data_lake/spark_jobs:/opt/spark/jobs
+      - ./data_lake/warehouse:/opt/spark/warehouse_data
+    environment:
+      - SPARK_MODE=worker
+      - SPARK_MASTER_URL=spark://spark-master:7077
+      - SPARK_WORKER_WEBUI_PORT=8082
+      - SPARK_WORKER_MEMORY=2g
+      - SPARK_WORKER_CORES=2
+      - SPARK_WAREHOUSE_DIR=/opt/spark/warehouse
+
+  # =====================================
+  # JUPYTER NOTEBOOK for Spark Development
+  # =====================================
+  jupyter-spark:
+    image: jupyter/pyspark-notebook:latest
+    hostname: jupyter-spark
+    container_name: jupyter-spark
+    depends_on:
+      spark-master:
+        condition: service_healthy
+    ports:
+      - "8888:8888"   # Jupyter Web UI
+    networks:
+      - lakehouse_network
+    volumes:
+      - ./data_lake/notebooks:/home/jovyan/notebooks
+      - ./data_lake/warehouse:/home/jovyan/warehouse_data
+      - ./data_lake/spark_jobs:/home/jovyan/spark_jobs
+    environment:
+      - JUPYTER_ENABLE_LAB=yes
+      - SPARK_MASTER=spark://spark-master:7077
+    command: start-notebook.sh --NotebookApp.token='' --NotebookApp.password=''
