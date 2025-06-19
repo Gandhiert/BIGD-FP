@@ -1,0 +1,16 @@
+# Data hasil generate dan data lake
+/generated_data/
+/data_lake/raw/
+/data_lake/warehouse/
+
+
+*.csv
+
+# File sementara Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Jupyter notebook checkpoints
+.ipynb_checkpoints/ 
