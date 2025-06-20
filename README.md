@@ -1,14 +1,5 @@
 # 🎮 Advanced Gaming Data Lakehouse Platform
 
-[![Python](https://img.shields.io/badge/Python-3.11+-blue.svg)](https://python.org)
-[![Apache Spark](https://img.shields.io/badge/Apache%20Spark-3.5+-orange.svg)](https://spark.apache.org)
-[![Apache Kafka](https://img.shields.io/badge/Apache%20Kafka-Latest-purple.svg)](https://kafka.apache.org)
-[![MinIO](https://img.shields.io/badge/MinIO-Latest-red.svg)](https://min.io)
-[![Streamlit](https://img.shields.io/badge/Streamlit-Latest-brightgreen.svg)](https://streamlit.io)
-
-**Enterprise-grade Data Lakehouse platform untuk analisis gaming data dengan real-time streaming capabilities dan advanced machine learning analytics.**
-
-## 👥 Anggota Kelompok
 
 |             Nama              |     NRP    |
 |-------------------------------|------------|
