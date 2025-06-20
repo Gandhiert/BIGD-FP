@@ -54,12 +54,12 @@ graph TB
         RZ[Raw Zone<br/>- Original datasets<br/>- Unprocessed files]
         SZ[Streaming Zone<br/>- Real-time events<br/>- Kafka messages]
         WZ[Warehouse Zone<br/>- Processed data<br/>- Analytics ready]
+        CZ[Cluster Zone<br/>Hasil cluster disimpan]
     end
 
     subgraph "Processing Layer"
         SE[Spark ETL Engine]
         SML[Spark ML Pipeline]
-        BA[Batch Analytics]
         RA[Real-time Analytics]
     end
 
@@ -73,6 +73,7 @@ graph TB
     subgraph "Presentation Layer"
         DB[Gaming Dashboard<br/>Streamlit UI]
         VZ[Visualization<br/>Plotly Charts]
+        GR[Games Recommendation]
     end
 
     DS1 --> RZ
@@ -83,12 +84,16 @@ graph TB
     
     RZ --> SE
     SZ --> RA
+    SZ --> SML
+    SML --> CZ
     SE --> WZ
     RA --> WZ
     
     WZ --> API
     SZ --> API
-    
+    CZ --> API
+
+    API --> GR
     API --> DB
     DB --> VZ
     
