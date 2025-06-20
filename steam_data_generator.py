@@ -20,7 +20,7 @@ class SteamDataGenerator:
         """
         self.df = pd.read_csv(csv_file_path)
         self.fake = Faker()
-        self.output_dir = "generated_data"
+        self.output_dir = "data_lake/raw"
         
         # Create output directory if it doesn't exist
         if not os.path.exists(self.output_dir):
@@ -370,45 +370,6 @@ class SteamDataGenerator:
         print("\n" + "=" * 50)
         print("Data generation complete!")
         print(f"All files saved in: {self.output_dir}/")
-        
-        # Generate summary report
-        self.generate_summary_report()
-    
-    def generate_summary_report(self):
-        """
-        Generate a summary report of all generated data
-        """
-        report = f"""
-STEAM DATASET TRANSFORMATION REPORT
-Generated on: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
-=====================================
-
-Original Dataset: {len(self.df)} records
-
-Generated Files:
-1. unstructured_reviews.txt - 10,000 natural language game reviews
-2. game_server_YYYYMMDD.log - 365 days of server log files
-3. semi_structured_games.json - 5,000 complex nested JSON game records
-4. game_config_XXX.yaml - 200 YAML configuration files
-5. game_catalog.xml - XML catalog with 2,000 games
-
-Data Types Generated:
-- Unstructured: Natural language text, log files
-- Semi-structured: JSON with nested objects and arrays
-- Structured: XML with defined schema, YAML configurations
-
-Use Cases:
-- Text mining and NLP analysis
-- Log parsing and monitoring
-- API data processing
-- Configuration management
-- Data integration testing
-"""
-        
-        with open(f"{self.output_dir}/generation_report.txt", "w") as f:
-            f.write(report)
-        
-        print("\nSummary report saved as: generation_report.txt")
 
 # Example usage
 if __name__ == "__main__":

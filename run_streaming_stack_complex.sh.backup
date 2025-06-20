@@ -1,0 +1,477 @@
+#!/bin/bash
+
+echo "🚀 Starting Complete Streaming Stack (Kafka + Spark + Analytics)"
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+
+# Function untuk colored output
+print_status() {
+    echo -e "\033[1;32m[INFO]\033[0m $1"
+}
+
+print_warning() {
+    echo -e "\033[1;33m[WARN]\033[0m $1"
+}
+
+print_error() {
+    echo -e "\033[1;31m[ERROR]\033[0m $1"
+}
+
+# Check prerequisites
+command_exists() {
+    command -v "$1" >/dev/null 2>&1
+}
+
+print_status "Checking prerequisites..."
+
+if ! command_exists docker-compose; then
+    print_error "docker-compose not found. Please install docker-compose first."
+    exit 1
+fi
+
+if ! command_exists python3; then
+    print_error "python3 not found. Please install Python 3.8+ first."
+    exit 1
+fi
+
+# Check Python version dan setup environment
+PYTHON_VERSION=$(python3 -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')")
+print_status "Detected Python version: $PYTHON_VERSION"
+
+if [[ "$PYTHON_VERSION" == "3.13" ]]; then
+    print_warning "Python 3.13 detected. Using conda environment..."
+    
+    if command_exists conda; then
+        source $(conda info --base)/etc/profile.d/conda.sh
+        
+        if conda env list | grep -q "gaming_analytics"; then
+            print_status "Activating existing conda environment 'gaming_analytics'..."
+            conda activate gaming_analytics
+        else
+            print_status "Creating new conda environment 'gaming_analytics' with Python 3.11..."
+            conda create -n gaming_analytics python=3.11 -y
+            conda activate gaming_analytics
+        fi
+    else
+        print_error "Python 3.13 requires conda. Please install conda or use Python 3.11/3.12"
+        exit 1
+    fi
+else
+    if [ ! -d "venv" ]; then
+        print_status "Creating Python virtual environment..."
+        python3 -m venv venv
+    fi
+    
+    print_status "Activating virtual environment..."
+    source venv/bin/activate
+fi
+
+# Install dependencies
+print_status "Installing Python dependencies (including Kafka and Spark)..."
+if ! pip install -r requirements.txt; then
+    print_warning "Failed to install all dependencies. Installing critical packages individually..."
+    
+    critical_packages=(
+        "pandas" "numpy" "flask" "streamlit" "plotly" "requests" 
+        "minio" "pyyaml" "schedule" "sqlalchemy" "textblob" "vaderSentiment"
+        "kafka-python" "confluent-kafka" "pyspark" "findspark"
+    )
+    
+    for package in "${critical_packages[@]}"; do
+        print_status "Installing $package..."
+        pip install "$package"
+    done
+fi
+
+# Start complete infrastructure
+print_status "Starting complete infrastructure (MinIO + Kafka + Spark + Jupyter)..."
+docker-compose up -d
+
+print_status "Waiting for services to start..."
+sleep 30
+
+# Check service health
+print_status "Checking service health..."
+
+# Check MinIO
+if curl -s http://localhost:9000/minio/health/live > /dev/null; then
+    print_status "✅ MinIO is healthy"
+else
+    print_warning "⚠️ MinIO might not be fully ready yet"
+fi
+
+# Create MinIO buckets automatically
+print_status "Creating MinIO buckets..."
+python3 -c "
+import os
+import sys
+from minio import Minio
+from minio.error import S3Error
+import time
+
+# Wait for MinIO to be fully ready
+time.sleep(5)
+
+# Initialize MinIO client
+client = Minio(
+    'localhost:9000',
+    access_key='minioadmin',
+    secret_key='minioadmin',
+    secure=False
+)
+
+# Buckets to create
+buckets = ['raw-zone', 'warehouse-zone', 'streaming-zone']
+
+for bucket_name in buckets:
+    try:
+        if not client.bucket_exists(bucket_name):
+            client.make_bucket(bucket_name)
+            print(f'✅ Created bucket: {bucket_name}')
+        else:
+            print(f'✅ Bucket already exists: {bucket_name}')
+    except S3Error as e:
+        print(f'❌ Error creating bucket {bucket_name}: {e}')
+        
+print('🗄️ MinIO buckets setup completed')
+"
+
+# Check Kafka
+if docker exec kafka kafka-broker-api-versions --bootstrap-server localhost:9092 > /dev/null 2>&1; then
+    print_status "✅ Kafka is healthy"
+else
+    print_warning "⚠️ Kafka might not be fully ready yet"
+fi
+
+# Check Spark Master
+if curl -s http://localhost:8080 > /dev/null; then
+    print_status "✅ Spark Master is healthy"
+else
+    print_warning "⚠️ Spark Master might not be fully ready yet"
+fi
+
+# Create Kafka topics
+print_status "Creating Kafka topics for gaming events..."
+docker exec kafka kafka-topics --create --topic gaming.player.events --bootstrap-server localhost:9092 --partitions 3 --replication-factor 1 --if-not-exists
+docker exec kafka kafka-topics --create --topic gaming.reviews.new --bootstrap-server localhost:9092 --partitions 3 --replication-factor 1 --if-not-exists
+docker exec kafka kafka-topics --create --topic gaming.server.logs --bootstrap-server localhost:9092 --partitions 3 --replication-factor 1 --if-not-exists
+docker exec kafka kafka-topics --create --topic gaming.player.stats --bootstrap-server localhost:9092 --partitions 3 --replication-factor 1 --if-not-exists
+docker exec kafka kafka-topics --create --topic gaming.metrics.performance --bootstrap-server localhost:9092 --partitions 3 --replication-factor 1 --if-not-exists
+
+print_status "✅ Kafka topics created successfully"
+
+# Generate initial data dan setup lakehouse
+print_status "Setting up complete lakehouse with real-time data..."
+
+# Create necessary directories if they don't exist
+if [ ! -d "data_lake/raw" ]; then
+    mkdir -p data_lake/raw
+    print_status "✅ Created data_lake/raw directory"
+fi
+
+if [ ! -d "data_lake/warehouse" ]; then
+    mkdir -p data_lake/warehouse
+    print_status "✅ Created data_lake/warehouse directory"
+fi
+
+if [ ! -d "data_lake/logs" ]; then
+    mkdir -p data_lake/logs
+    print_status "✅ Created data_lake/logs directory"
+fi
+
+cd data_lake/scripts
+
+# Generate fresh gaming data if not exists
+if [ ! -f "../raw/unstructured_reviews.txt" ]; then
+    print_status "Generating initial gaming data..."
+    cd ../..
+    python steam_data_generator.py
+    cd data_lake/scripts
+    print_status "✅ Gaming data generated successfully"
+else
+    print_status "✅ Gaming data already exists, skipping generation"
+fi
+
+# Upload raw data to MinIO (only if raw data exists and warehouse doesn't exist)
+if [ -f "../raw/unstructured_reviews.txt" ] && [ ! -f "../warehouse/games.parquet" ]; then
+    print_status "Uploading raw data to MinIO..."
+    python upload_to_minio.py > ../logs/upload_raw.log 2>&1
+    if [ $? -eq 0 ]; then
+        print_status "✅ Raw data uploaded to MinIO successfully"
+    else
+        print_warning "⚠️ Raw data upload had issues. Check logs."
+    fi
+
+    # Run ETL to create warehouse data
+    print_status "Running ETL pipeline to create warehouse data..."
+    python download_from_minio_and_transform.py > ../logs/etl_transform.log 2>&1
+    if [ $? -eq 0 ]; then
+        print_status "✅ ETL transformation completed successfully"
+    else
+        print_warning "⚠️ ETL transformation had issues. Check logs."
+    fi
+
+    # Upload warehouse data to MinIO
+    print_status "Uploading warehouse data to MinIO..."
+    python upload_warehouse_to_minio.py > ../logs/upload_warehouse.log 2>&1
+    if [ $? -eq 0 ]; then
+        print_status "✅ Warehouse data uploaded to MinIO successfully"
+    else
+        print_warning "⚠️ Warehouse data upload had issues. Check logs."
+    fi
+else
+    print_status "✅ Warehouse data already exists, skipping ETL pipeline"
+fi
+
+# Run data governance setup
+print_status "Initializing data governance..."
+if command -v data_orchestrator.py &> /dev/null; then
+    python data_orchestrator.py run-etl full > ../logs/governance.log 2>&1
+fi
+
+# Start Kafka Producer untuk real-time streaming
+print_status "Starting Kafka Producer for real-time events..."
+nohup python kafka_producer_fixed.py > ../logs/kafka_producer.log 2>&1 &
+PRODUCER_PID=$!
+
+# Start Kafka Consumer untuk monitoring
+print_status "Starting Kafka Consumer for event monitoring..."
+nohup python kafka_consumer.py > ../logs/kafka_consumer.log 2>&1 &
+CONSUMER_PID=$!
+
+# Start data orchestrator
+print_status "Starting Data Orchestrator..."
+nohup python data_orchestrator.py > ../logs/orchestrator.log 2>&1 &
+ORCHESTRATOR_PID=$!
+
+# Start Analytics API
+print_status "Starting Enhanced Analytics API..."
+python analytics_api.py &
+API_PID=$!
+
+cd ../..
+
+# Wait for API to be ready
+print_status "Waiting for Analytics API to start..."
+sleep 10
+
+# Health check API
+if curl -s http://localhost:5000/api/health > /dev/null; then
+    print_status "✅ Analytics API is healthy"
+    
+    # Set lightweight mode for better performance
+    print_status "Configuring API for optimal performance..."
+    curl -X POST -H "Content-Type: application/json" \
+         -d '{"lightweight_mode": true}' \
+         http://localhost:5000/api/config/performance > /dev/null 2>&1
+    
+    if [ $? -eq 0 ]; then
+        print_status "✅ Lightweight mode enabled for better performance"
+    else
+        print_warning "⚠️ Could not configure performance mode"
+    fi
+else
+    print_warning "⚠️ Analytics API might not be ready"
+fi
+
+# Start Streamlit Dashboard
+print_status "Starting Gaming Analytics Dashboard..."
+streamlit run dashboard/gaming_dashboard.py \
+  --server.port 8501 \
+  --server.headless true \
+  --server.enableCORS false \
+  --server.enableXsrfProtection false &
+DASHBOARD_PID=$!
+
+# Wait for dashboard to start
+print_status "Waiting for Dashboard to initialize..."
+sleep 15
+
+# Display comprehensive summary
+echo ""
+echo "🎉 Complete Streaming Stack Successfully Started!"
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo ""
+echo "📋 Service Status & URLs:"
+echo "   🗄️  MinIO Console:         http://localhost:9001"
+echo "   🔧 Analytics API:          http://localhost:5000"
+echo "   📊 Gaming Dashboard:       http://localhost:8501"
+echo "   🎯 Data Orchestrator:      Running (PID: $ORCHESTRATOR_PID)"
+echo "   📡 Kafka Producer:         Running (PID: $PRODUCER_PID) - Generating real-time events"
+echo "   📡 Kafka Consumer:         Running (PID: $CONSUMER_PID) - Monitoring events"
+echo ""
+echo "🚀 Big Data & Streaming Services:"
+echo "   📡 Kafka Control Center:   http://localhost:9021"
+echo "   🗂️  Schema Registry:       http://localhost:8083"
+echo "   ⚡ Spark Master UI:        http://localhost:8080"
+echo "   👷 Spark Worker 1:         http://localhost:8081"
+echo "   👷 Spark Worker 2:         http://localhost:8082"
+echo "   📓 Jupyter Notebooks:      http://localhost:8888"
+echo ""
+echo "🔧 Kafka Topics Created:"
+echo "   📡 gaming.player.events"
+echo "   ⭐ gaming.reviews.new"
+echo "   📝 gaming.server.logs"
+echo "   👥 gaming.player.stats"
+echo "   📊 gaming.metrics.performance"
+echo ""
+echo "⚡ Performance Configuration:"
+echo "   🚀 Lightweight Mode: ENABLED (untuk mengurangi beban CPU)"
+echo "   📊 Sentiment Analysis: Basic mode (tanpa NLP libraries)"
+echo "   💾 Cache: Enabled untuk response yang lebih cepat"
+echo "   🔧 Performance Control: python data_lake/scripts/performance_config.py --help"
+echo ""
+echo "🛠️ Development & Testing Commands:"
+echo "   Start Kafka Producer:      cd data_lake/scripts && python kafka_producer.py"
+echo "   Start Kafka Consumer:      cd data_lake/scripts && python kafka_consumer.py"
+echo "   Run Spark Streaming:       cd data_lake/spark_jobs && python real_time_analytics.py"
+echo "   Run Batch Analytics:       cd data_lake/spark_jobs && python batch_analytics.py"
+echo ""
+echo "⚡ Performance Management Commands:"
+echo "   Check Performance Status:  python data_lake/scripts/performance_config.py --status"
+echo "   Enable Lightweight Mode:   python data_lake/scripts/performance_config.py --lightweight"
+echo "   Enable Full NLP Mode:      python data_lake/scripts/performance_config.py --full-mode"
+echo "   Clear Analysis Cache:      python data_lake/scripts/performance_config.py --clear-cache"
+echo ""
+echo "📊 Analytics & Management Commands:"
+echo "   Data Quality Check:        cd data_lake/scripts && python data_orchestrator.py quality-check"
+echo "   Health Check:              cd data_lake/scripts && python data_orchestrator.py health-check"
+echo "   Search Data Catalog:       cd data_lake/scripts && python data_governance.py search"
+echo "   Data Lineage:              cd data_lake/scripts && python data_governance.py lineage <dataset>"
+echo "   Governance Audit:          cd data_lake/scripts && python data_governance.py audit"
+echo ""
+echo "📁 Important Directories:"
+echo "   Spark Jobs:                data_lake/spark_jobs/"
+echo "   Jupyter Notebooks:         data_lake/notebooks/"
+echo "   Kafka Scripts:             data_lake/scripts/kafka_*.py"
+echo "   Log Files:                 data_lake/logs/"
+echo ""
+echo "🔑 Default Credentials:"
+echo "   MinIO - Username: minioadmin, Password: minioadmin"
+echo "   Jupyter - No password required"
+echo ""
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo ""
+echo "💡 Complete Features Available:"
+echo "   ✅ Real-time Kafka Streaming"
+echo "   ✅ Apache Spark Processing (Batch + Streaming)"
+echo "   ✅ Advanced NLP Sentiment Analysis"
+echo "   ✅ Machine Learning Analytics"
+echo "   ✅ Data Quality Monitoring"
+echo "   ✅ Data Governance & Metadata Catalog"
+echo "   ✅ Interactive Jupyter Development"
+echo "   ✅ Real-time Analytics Dashboard"
+echo "   ✅ Comprehensive Monitoring & Alerting"
+echo ""
+echo "🚀 Quick Start Guide:"
+echo "   1. View Dashboard: http://localhost:8501 untuk real-time analytics"
+echo "   2. Monitor Kafka: http://localhost:9021 untuk streaming monitoring"
+echo "   3. Check Spark: http://localhost:8080 untuk cluster monitoring"
+echo "   4. MinIO Console: http://localhost:9001 untuk data lake management"
+echo "   5. Jupyter Development: http://localhost:8888 untuk experimentation"
+echo "   ✅ Real-time streaming sudah berjalan otomatis!"
+echo ""
+echo "🛑 To stop all services, press Ctrl+C"
+echo ""
+
+# Setup signal handler untuk graceful shutdown
+cleanup() {
+    echo ""
+    print_status "🛑 Shutting down Complete Streaming Stack..."
+    
+    # Kill background processes
+    if [ ! -z "$PRODUCER_PID" ]; then
+        kill $PRODUCER_PID 2>/dev/null
+        print_status "📡 Stopped Kafka Producer"
+    fi
+    
+    if [ ! -z "$CONSUMER_PID" ]; then
+        kill $CONSUMER_PID 2>/dev/null
+        print_status "📡 Stopped Kafka Consumer"
+    fi
+    
+    if [ ! -z "$ORCHESTRATOR_PID" ]; then
+        kill $ORCHESTRATOR_PID 2>/dev/null
+        print_status "📊 Stopped Data Orchestrator"
+    fi
+    
+    if [ ! -z "$API_PID" ]; then
+        kill $API_PID 2>/dev/null
+        print_status "🔧 Stopped Analytics API"
+    fi
+    
+    if [ ! -z "$DASHBOARD_PID" ]; then
+        kill $DASHBOARD_PID 2>/dev/null
+        print_status "📊 Stopped Dashboard"
+    fi
+    
+    # Stop Docker containers
+    docker-compose down -v
+    print_status "🗄️ Stopped all infrastructure services"
+    
+    print_status "✅ All services stopped successfully"
+    exit 0
+}
+
+# Trap signals untuk cleanup
+trap cleanup INT TERM
+
+# Keep main process running dan monitor health
+echo "🔄 Complete Streaming Stack is running. Monitoring system health..."
+echo "   Use 'docker-compose logs -f kafka' to see Kafka infrastructure logs"
+echo "   Use 'docker-compose logs -f spark-master' to see Spark logs"
+echo "   Use 'tail -f data_lake/logs/kafka_producer.log' to see real-time event generation"
+echo "   Use 'tail -f data_lake/logs/kafka_consumer.log' to see event processing"
+echo "   Use 'tail -f data_lake/logs/orchestrator.log' to see data orchestrator logs"
+echo ""
+
+# Health monitoring loop
+HEALTH_CHECK_INTERVAL=300  # 5 minutes
+LAST_HEALTH_CHECK=0
+
+while true; do
+    sleep 30
+    
+    CURRENT_TIME=$(date +%s)
+    
+    # Periodic health checks
+    if (( CURRENT_TIME - LAST_HEALTH_CHECK >= HEALTH_CHECK_INTERVAL )); then
+        print_status "🏥 Running periodic health check..."
+        
+        # Check if processes are still running
+        if ! ps -p $PRODUCER_PID > /dev/null 2>&1; then
+            print_warning "⚠️ Kafka Producer process stopped unexpectedly"
+        fi
+        
+        if ! ps -p $CONSUMER_PID > /dev/null 2>&1; then
+            print_warning "⚠️ Kafka Consumer process stopped unexpectedly"
+        fi
+        
+        if ! ps -p $API_PID > /dev/null 2>&1; then
+            print_warning "⚠️ Analytics API process stopped unexpectedly"
+        fi
+        
+        if ! ps -p $DASHBOARD_PID > /dev/null 2>&1; then
+            print_warning "⚠️ Dashboard process stopped unexpectedly"
+        fi
+        
+        if ! ps -p $ORCHESTRATOR_PID > /dev/null 2>&1; then
+            print_warning "⚠️ Orchestrator process stopped unexpectedly"
+        fi
+        
+        # Check infrastructure health
+        if ! curl -s http://localhost:9000/minio/health/live > /dev/null; then
+            print_warning "⚠️ MinIO health check failed"
+        fi
+        
+        if ! curl -s http://localhost:5000/api/health > /dev/null; then
+            print_warning "⚠️ Analytics API health check failed"
+        fi
+        
+        if ! curl -s http://localhost:8080 > /dev/null; then
+            print_warning "⚠️ Spark Master health check failed"
+        fi
+        
+        LAST_HEALTH_CHECK=$CURRENT_TIME
+        print_status "✅ Health check completed"
+    fi
+done 

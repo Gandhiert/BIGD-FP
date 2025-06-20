@@ -2,6 +2,7 @@
 pandas>=2.1.0
 numpy>=1.25.0
 pyarrow>=13.0.0
+lz4
 
 # MinIO client
 minio>=7.2.0
@@ -38,4 +39,19 @@ schedule>=1.2.0
 croniter>=1.4.1
 
 # Data Governance & Security
-sqlalchemy>=2.0.0 
+sqlalchemy>=2.0.0
+
+# Apache Kafka Integration
+kafka-python>=2.0.2
+confluent-kafka>=2.3.0
+avro-python3>=1.11.0
+fastavro>=1.8.0
+
+# Apache Spark Integration
+pyspark>=3.5.0
+delta-spark>=3.0.0
+py4j>=0.10.9.7
+
+# Streaming & Real-time Processing
+findspark>=2.0.1
+kafka-python-ng>=2.2.0 
