@@ -1008,6 +1008,66 @@ def streaming_status():
         logger.error(f"Streaming status error: {e}")
         return jsonify({'error': str(e)}), 500
 
+@app.route('/api/recommendation/cluster', methods=['POST'])
+def recommend_by_cluster():
+    """
+    Rekomendasi game berbasis cluster hasil KMeans PySpark.
+    Input: JSON {"user_id": <id>}
+    Output: Daftar game populer di cluster user tsb
+    """
+    try:
+        user_id = request.json.get('user_id')
+        if not user_id:
+            return jsonify({'error': 'user_id is required'}), 400
+
+        # 1. Baca hasil clustering player
+        segments_path = 'analytics/player_segments.parquet'
+        player_segments = get_parquet_from_minio(segments_path)
+        if player_segments is None or 'user_id' not in player_segments.columns:
+            return jsonify({'error': 'Player segments not available or missing user_id'}), 500
+
+        # 2. Cari cluster user
+        user_row = player_segments[player_segments['user_id'] == user_id]
+        if user_row.empty:
+            return jsonify({'error': f'user_id {user_id} not found in player segments'}), 404
+
+        user_cluster = user_row.iloc[0]['cluster']
+
+        # 3. Ambil semua user di cluster tsb
+        cluster_users = player_segments[player_segments['cluster'] == user_cluster]['user_id'].tolist()
+
+        # 4. Ambil review dari user-user di cluster tsb
+        reviews_df = get_combined_data('reviews', prefer_streaming=False)
+        if reviews_df is None or 'user_id' not in reviews_df.columns or 'app_id' not in reviews_df.columns:
+            return jsonify({'error': 'Reviews data not available or missing columns'}), 500
+
+        cluster_reviews = reviews_df[reviews_df['user_id'].isin(cluster_users)]
+
+        # 5. Hitung game terpopuler di cluster tsb
+        top_games = (
+            cluster_reviews['app_id']
+            .value_counts()
+            .head(10)
+            .index.tolist()
+        )
+
+        # 6. Ambil metadata game
+        games_df = get_parquet_from_minio('games.parquet')
+        if games_df is None or 'app_id' not in games_df.columns:
+            return jsonify({'error': 'Games metadata not available'}), 500
+
+        recommended_games = games_df[games_df['app_id'].isin(top_games)]
+        result = recommended_games.to_dict(orient='records')
+
+        return jsonify({
+            'user_id': user_id,
+            'cluster': int(user_cluster),
+            'recommended_games': result
+        })
+    except Exception as e:
+        logger.error(f"Recommendation error: {e}")
+        return jsonify({'error': str(e)}), 500
+
 if __name__ == '__main__':
     logger.info("🚀 Starting Gaming Analytics API with Advanced Sentiment Analysis")
     logger.info(f"📊 Sentiment Analysis: {'Advanced NLP' if SENTIMENT_ANALYZER_AVAILABLE else 'Basic Fallback'}")

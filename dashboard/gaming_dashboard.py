@@ -406,6 +406,31 @@ def display_dashboard():
         # Clear loading message
         status_placeholder.empty()
         
+        # --- REKOMENDASI GAME BERBASIS CLUSTER ---
+        st.subheader("🎲 Rekomendasi Game untuk User (Cluster-based)")
+        with st.expander("Dapatkan rekomendasi game berdasarkan user_id dan cluster pengguna", expanded=False):
+            user_id_input = st.text_input("Masukkan user_id Steam Anda:", value="", help="Gunakan user_id dari dataset/users.csv")
+            if st.button("Dapatkan Rekomendasi Game"): 
+                if user_id_input:
+                    with st.spinner("Mengambil rekomendasi game dari cluster..."):
+                        try:
+                            response = requests.post(f"{API_BASE_URL}/recommendation/cluster", json={"user_id": user_id_input}, timeout=20)
+                            if response.status_code == 200:
+                                rec_data = response.json()
+                                st.success(f"User {rec_data['user_id']} termasuk dalam Cluster {rec_data['cluster']}")
+                                if rec_data['recommended_games']:
+                                    rec_df = pd.DataFrame(rec_data['recommended_games'])
+                                    st.dataframe(rec_df, use_container_width=True)
+                                else:
+                                    st.info("Tidak ada rekomendasi game untuk cluster ini.")
+                            else:
+                                st.error(f"Gagal mendapatkan rekomendasi: {response.json().get('error', response.text)}")
+                        except Exception as e:
+                            st.error(f"Error: {e}")
+                else:
+                    st.warning("Masukkan user_id terlebih dahulu!")
+        # --- END REKOMENDASI ---
+        
         # Overview metrics with real-time indicators
         st.subheader("📊 Overview Metrics")
         if overview_data:

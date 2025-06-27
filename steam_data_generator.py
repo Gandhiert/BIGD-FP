@@ -343,6 +343,34 @@ class SteamDataGenerator:
         
         print(f"Generated {num_days} days of log files")
     
+    def generate_parquet_files(self):
+        # games.parquet
+        games = self.df.copy()
+        games['app_id'] = range(1, len(games)+1)
+        games.to_parquet("games.parquet")
+        print("Generated games.parquet")
+
+        # reviews.parquet (dummy)
+        reviews = pd.DataFrame({
+            "user_id": [f"user_{i}" for i in range(1, 11)],
+            "app_id": [i for i in range(1, 11)],
+            "helpful_votes": np.random.randint(0, 10, 10),
+            "total_votes": np.random.randint(10, 20, 10),
+            "playtime_hours": np.random.randint(1, 100, 10)
+        })
+        reviews.to_parquet("reviews.parquet")
+        print("Generated reviews.parquet")
+
+        # player_segments.parquet (dummy)
+        segments = pd.DataFrame({
+            "user_id": [f"user_{i}" for i in range(1, 11)],
+            "cluster": np.random.randint(0, 3, 10)
+        })
+        import os
+        os.makedirs("analytics", exist_ok=True)
+        segments.to_parquet("analytics/player_segments.parquet")
+        print("Generated analytics/player_segments.parquet")
+    
     def generate_all_formats(self):
         """
         Generate all types of unstructured and semi-structured data
@@ -367,6 +395,9 @@ class SteamDataGenerator:
         print("\n5. Generating XML structured data...")
         self.generate_xml_structured_data(2000)
         
+        print("\n6. Generating parquet files...")
+        self.generate_parquet_files()
+        
         print("\n" + "=" * 50)
         print("Data generation complete!")
         print(f"All files saved in: {self.output_dir}/")
@@ -376,8 +407,9 @@ if __name__ == "__main__":
     # Initialize the generator with your CSV file
     # Replace 'your_steam_dataset.csv' with the actual path to your downloaded CSV
     try:
-        generator = SteamDataGenerator('games.csv')
+        generator = SteamDataGenerator('dataset/games.csv')
         generator.generate_all_formats()
+        generator.generate_parquet_files()
     except FileNotFoundError:
         print("Error: Please download the dataset from Kaggle and update the file path in the script.")
         print("The script expects a CSV file from the Steam game recommendations dataset.")
