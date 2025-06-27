@@ -43,7 +43,8 @@ class GamingEventConsumer:
             'game_reviews': [],
             'server_logs': [],
             'player_stats': [],
-            'game_metrics': []
+            'game_metrics': [],
+            'games_stream': []  # New buffer for games streaming data
         }
         
         # MinIO client untuk storage
@@ -60,7 +61,8 @@ class GamingEventConsumer:
             'game_reviews': 'gaming.reviews.new',
             'server_logs': 'gaming.server.logs',
             'player_stats': 'gaming.player.stats',
-            'game_metrics': 'gaming.metrics.performance'
+            'game_metrics': 'gaming.metrics.performance',
+            'games_stream': 'gaming.games.stream'  # New topic for games CSV streaming
         }
         
         # Buffer settings
@@ -179,6 +181,34 @@ class GamingEventConsumer:
         if crash_rate > 3.0:
             logger.warning(f"🚨 High crash rate ({crash_rate}%) for game {metrics.get('game_id')}")
     
+    def process_games_stream(self, game_data: Dict):
+        """Process streaming games data untuk clustering"""
+        game_data['processed_at'] = datetime.now().isoformat()
+        
+        # Validate required fields
+        required_fields = ['app_id', 'title', 'price_final', 'positive_ratio', 'user_reviews']
+        if not all(field in game_data for field in required_fields):
+            logger.warning(f"⚠️ Missing required fields in game data: {game_data.get('app_id', 'unknown')}")
+            return
+        
+        # Add clustering readiness indicators
+        game_data['clustering_ready'] = True
+        game_data['data_source'] = 'kafka_stream'
+        
+        # Extract features if available
+        if 'features' in game_data:
+            game_data['features_extracted'] = True
+        
+        self.buffer['games_stream'].append(game_data)
+        
+        # Log high-value games
+        if game_data.get('price_final', 0) > 50:
+            logger.info(f"💰 High-value game streamed: {game_data.get('title', 'Unknown')} - ${game_data.get('price_final', 0)}")
+        
+        # Log popular games
+        if game_data.get('user_reviews', 0) > 10000:
+            logger.info(f"🎮 Popular game streamed: {game_data.get('title', 'Unknown')} - {game_data.get('user_reviews', 0)} reviews")
+    
     def flush_buffer_to_minio(self, event_type: str):
         """Flush buffer ke MinIO storage"""
         if not self.buffer[event_type]:
@@ -257,6 +287,8 @@ class GamingEventConsumer:
                                 self.process_player_stats(message.value)
                             elif topic_key == 'game_metrics':
                                 self.process_game_metrics(message.value)
+                            elif topic_key == 'games_stream':
+                                self.process_games_stream(message.value)
                             
                             # Check buffer size untuk immediate flush
                             if len(self.buffer[topic_key]) >= self.buffer_size:

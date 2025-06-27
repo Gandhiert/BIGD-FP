@@ -1,4 +1,5 @@
 from flask import Flask, jsonify, request
+from flask_cors import CORS
 import pandas as pd
 from minio import Minio
 import duckdb
@@ -16,6 +17,7 @@ except ImportError:
     logging.warning("⚠️ Advanced sentiment analyzer not available. Using fallback method.")
 
 app = Flask(__name__)
+CORS(app)  # Enable CORS for all routes
 
 # Setup logging
 logging.basicConfig(level=logging.INFO)
@@ -31,6 +33,7 @@ client = Minio(
 
 WAREHOUSE_BUCKET = 'warehouse-zone'
 STREAMING_BUCKET = 'streaming-zone'
+CLUSTERS_BUCKET = 'clusters-zone'
 
 # Global sentiment analyzer instance
 sentiment_analyzer = None
@@ -1008,7 +1011,509 @@ def streaming_status():
         logger.error(f"Streaming status error: {e}")
         return jsonify({'error': str(e)}), 500
 
+# ==========================================
+# CLUSTERING API ENDPOINTS
+# ==========================================
+
+@app.route('/api/clustering/games', methods=['GET'])
+def get_clustered_games():
+    """Get clustered games data with filtering and pagination"""
+    try:
+        # Get query parameters
+        cluster_id = request.args.get('cluster_id', type=int)
+        limit = request.args.get('limit', 100, type=int)
+        offset = request.args.get('offset', 0, type=int)
+        include_features = request.args.get('include_features', 'false').lower() == 'true'
+        
+        logger.info(f"Getting clustered games: cluster_id={cluster_id}, limit={limit}, offset={offset}")
+        
+        # Load latest clusters data
+        try:
+            clusters_df = get_parquet_from_minio('latest/games_clusters_latest.parquet', bucket=CLUSTERS_BUCKET)
+            if clusters_df is None:
+                return jsonify({'error': 'No clustering data available'}), 404
+        except Exception as e:
+            logger.error(f"Error loading clusters data: {e}")
+            return jsonify({'error': 'Failed to load clustering data'}), 500
+        
+        # Filter by cluster if specified
+        if cluster_id is not None:
+            clusters_df = clusters_df[clusters_df['cluster'] == cluster_id]
+            
+        # Select columns
+        base_columns = ['app_id', 'title', 'rating', 'positive_ratio', 'user_reviews', 'price_final', 'cluster']
+        if include_features:
+            feature_columns = [col for col in clusters_df.columns if '_encoded' in col or '_count' in col or '_category' in col or '_numeric' in col or '_log' in col or '_year' in col]
+            columns = base_columns + feature_columns
+        else:
+            columns = base_columns
+            
+        # Filter columns that exist
+        available_columns = [col for col in columns if col in clusters_df.columns]
+        result_df = clusters_df[available_columns]
+        
+        # Apply pagination
+        total_count = len(result_df)
+        result_df = result_df.iloc[offset:offset + limit]
+        
+        # Convert to response format
+        games = result_df.to_dict('records')
+        
+        response = {
+            'games': games,
+            'pagination': {
+                'total': total_count,
+                'limit': limit,
+                'offset': offset,
+                'has_more': offset + limit < total_count
+            },
+            'cluster_filter': cluster_id,
+            'timestamp': datetime.now().isoformat()
+        }
+        
+        return jsonify(response)
+        
+    except Exception as e:
+        logger.error(f"Error getting clustered games: {e}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/clustering/analysis', methods=['GET'])
+def get_cluster_analysis():
+    """Get detailed cluster analysis and statistics"""
+    try:
+        logger.info("Getting cluster analysis")
+        
+        # Load latest cluster analysis
+        try:
+            data = client.get_object(CLUSTERS_BUCKET, 'latest/cluster_analysis_latest.json')
+            analysis_data = json.loads(data.read().decode('utf-8'))
+        except Exception as e:
+            logger.error(f"Error loading cluster analysis: {e}")
+            return jsonify({'error': 'No cluster analysis available'}), 404
+        
+        # Add summary statistics
+        if 'cluster_analysis' in analysis_data:
+            cluster_analysis = analysis_data['cluster_analysis']
+            
+            # Calculate summary stats
+            total_games = sum(cluster['game_count'] for cluster in cluster_analysis)
+            avg_price_overall = sum(cluster['avg_price'] * cluster['game_count'] for cluster in cluster_analysis) / total_games if total_games > 0 else 0
+            
+            summary = {
+                'total_games': total_games,
+                'total_clusters': len(cluster_analysis),
+                'avg_price_overall': round(avg_price_overall, 2),
+                'largest_cluster': max(cluster_analysis, key=lambda x: x['game_count']) if cluster_analysis else None,
+                'highest_rated_cluster': max(cluster_analysis, key=lambda x: x['avg_positive_ratio']) if cluster_analysis else None
+            }
+            
+            analysis_data['summary'] = summary
+        
+        return jsonify(analysis_data)
+        
+    except Exception as e:
+        logger.error(f"Error getting cluster analysis: {e}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/games/search', methods=['GET'])
+def search_games():
+    """Search games by title/name"""
+    try:
+        # Get query parameters
+        query = request.args.get('q', '').strip()
+        limit = request.args.get('limit', 10, type=int)
+        
+        if not query:
+            return jsonify({'error': 'Query parameter "q" is required'}), 400
+        
+        logger.info(f"Searching games with query: '{query}'")
+        
+        # Load clusters data to get games list
+        try:
+            clusters_df = get_parquet_from_minio('latest/games_clusters_latest.parquet', bucket=CLUSTERS_BUCKET)
+            if clusters_df is None:
+                # Fallback to games.parquet if clusters not available
+                clusters_df = get_parquet_from_minio('games.parquet')
+                if clusters_df is None:
+                    return jsonify({'error': 'No games data available'}), 404
+        except Exception as e:
+            logger.error(f"Error loading games data: {e}")
+            return jsonify({'error': 'Failed to load games data'}), 500
+        
+        # Search for games by title (case-insensitive)
+        query_lower = query.lower()
+        matching_games = clusters_df[
+            clusters_df['title'].str.lower().str.contains(query_lower, na=False, regex=False)
+        ]
+        
+        if matching_games.empty:
+            return jsonify({
+                'games': [],
+                'total_count': 0,
+                'query': query,
+                'message': 'No games found matching the query'
+            })
+        
+        # Sort by relevance (exact matches first, then partial matches)
+        matching_games = matching_games.copy()
+        matching_games['relevance_score'] = matching_games['title'].str.lower().apply(
+            lambda x: 100 if x == query_lower else (50 if x.startswith(query_lower) else 10)
+        )
+        matching_games = matching_games.sort_values(['relevance_score', 'user_reviews'], ascending=[False, False])
+        
+        # Limit results
+        result_games = matching_games.head(limit)
+        
+        # Prepare response
+        games_list = []
+        for _, game in result_games.iterrows():
+            game_dict = {
+                'app_id': int(game['app_id']),
+                'title': game['title'],
+                'rating': game.get('rating', 'N/A'),
+                'user_reviews': int(game.get('user_reviews', 0)),
+                'price_final': float(game.get('price_final', 0)),
+                'relevance_score': float(game['relevance_score'])
+            }
+            
+            # Add cluster info if available
+            if 'cluster' in game:
+                game_dict['cluster'] = int(game['cluster'])
+            if 'positive_ratio' in game:
+                game_dict['positive_ratio'] = float(game['positive_ratio'])
+                
+            games_list.append(game_dict)
+        
+        response = {
+            'games': games_list,
+            'total_count': len(matching_games),
+            'returned_count': len(games_list),
+            'query': query,
+            'timestamp': datetime.now().isoformat()
+        }
+        
+        return jsonify(response)
+        
+    except Exception as e:
+        logger.error(f"Error searching games: {e}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/recommendations/<game_title>', methods=['GET'])
+def get_recommendations_by_title(game_title):
+    """Get game recommendations by game title (more user-friendly endpoint)"""
+    try:
+        logger.info(f"Getting recommendations for game title: '{game_title}'")
+        
+        # First, search for the game by title
+        # Load clusters data
+        try:
+            clusters_df = get_parquet_from_minio('latest/games_clusters_latest.parquet', bucket=CLUSTERS_BUCKET)
+            if clusters_df is None:
+                return jsonify({'error': 'No clustering data available'}), 404
+        except Exception as e:
+            logger.error(f"Error loading clusters data: {e}")
+            return jsonify({'error': 'Failed to load clustering data'}), 500
+        
+        # Search for the game (case-insensitive, partial match)
+        game_title_lower = game_title.lower().strip()
+        matching_games = clusters_df[
+            clusters_df['title'].str.lower().str.contains(game_title_lower, na=False, regex=False)
+        ]
+        
+        if matching_games.empty:
+            return jsonify({
+                'error': 'Game not found',
+                'searched_title': game_title,
+                'suggestions': 'Try searching with partial game name or check spelling'
+            }), 404
+        
+        # Get the best match (prioritize exact matches, then by popularity)
+        matching_games = matching_games.copy()
+        matching_games['match_score'] = matching_games['title'].str.lower().apply(
+            lambda x: 100 if x == game_title_lower else (80 if x.startswith(game_title_lower) else 50)
+        )
+        best_match = matching_games.sort_values(['match_score', 'user_reviews'], ascending=[False, False]).iloc[0]
+        
+        game_id = int(best_match['app_id'])
+        
+        # Now get recommendations using the existing logic
+        limit = request.args.get('limit', 8, type=int)
+        same_cluster_only = request.args.get('same_cluster_only', 'false').lower() == 'true'
+        
+        reference_cluster = best_match['cluster']
+        
+        # Get recommendation candidates
+        if same_cluster_only:
+            candidates = clusters_df[
+                (clusters_df['cluster'] == reference_cluster) & 
+                (clusters_df['app_id'] != game_id)
+            ]
+        else:
+            candidates = clusters_df[clusters_df['app_id'] != game_id]
+        
+        if candidates.empty:
+            return jsonify({
+                'recommendations': [],
+                'game_info': {
+                    'app_id': game_id,
+                    'title': best_match['title'],
+                    'cluster': int(best_match['cluster']),
+                    'rating': best_match['rating'],
+                    'positive_ratio': float(best_match['positive_ratio']),
+                    'user_reviews': int(best_match['user_reviews']),
+                    'price_final': float(best_match['price_final'])
+                }
+            })
+        
+        # Score recommendations based on similarity
+        ref_price = best_match['price_final']
+        ref_rating = best_match['positive_ratio']
+        ref_reviews = best_match['user_reviews']
+        
+        # Calculate similarity scores
+        candidates = candidates.copy()
+        candidates['price_similarity'] = 1 - abs(candidates['price_final'] - ref_price) / max(candidates['price_final'].max(), ref_price, 1)
+        candidates['rating_similarity'] = 1 - abs(candidates['positive_ratio'] - ref_rating) / 100
+        candidates['popularity_factor'] = (candidates['user_reviews'] + 1).apply(lambda x: min(x / (ref_reviews + 1), 2))
+        
+        # Combined similarity score
+        candidates['similarity_score'] = (
+            candidates['price_similarity'] * 0.3 +
+            candidates['rating_similarity'] * 0.4 +
+            candidates['popularity_factor'] * 0.3
+        )
+        
+        # Sort by similarity and get top recommendations
+        recommendations = candidates.nlargest(limit, 'similarity_score')
+        
+        # Prepare response
+        rec_list = []
+        for _, game in recommendations.iterrows():
+            rec_list.append({
+                'app_id': int(game['app_id']),
+                'title': game['title'],
+                'rating': game['rating'],
+                'positive_ratio': float(game['positive_ratio']),
+                'user_reviews': int(game['user_reviews']),
+                'price_final': float(game['price_final']),
+                'cluster': int(game['cluster']),
+                'similarity_score': float(game['similarity_score'])
+            })
+        
+        response = {
+            'recommendations': rec_list,
+            'game_info': {
+                'app_id': game_id,
+                'title': best_match['title'],
+                'cluster': int(best_match['cluster']),
+                'rating': best_match['rating'],
+                'positive_ratio': float(best_match['positive_ratio']),
+                'user_reviews': int(best_match['user_reviews']),
+                'price_final': float(best_match['price_final'])
+            },
+            'search_info': {
+                'searched_title': game_title,
+                'matched_title': best_match['title'],
+                'match_score': float(best_match['match_score']),
+                'total_matches': len(matching_games)
+            },
+            'parameters': {
+                'same_cluster_only': same_cluster_only,
+                'limit': limit,
+                'reference_cluster': int(reference_cluster)
+            },
+            'timestamp': datetime.now().isoformat()
+        }
+        
+        return jsonify(response)
+        
+    except Exception as e:
+        logger.error(f"Error getting recommendations by title: {e}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/clustering/recommendations', methods=['GET'])
+def get_game_recommendations():
+    """Get game recommendations based on clustering similarity"""
+    try:
+        # Get query parameters
+        game_id = request.args.get('game_id', type=int)
+        limit = request.args.get('limit', 10, type=int)
+        same_cluster_only = request.args.get('same_cluster_only', 'true').lower() == 'true'
+        
+        if not game_id:
+            return jsonify({'error': 'game_id parameter is required'}), 400
+        
+        logger.info(f"Getting recommendations for game_id={game_id}, limit={limit}")
+        
+        # Load clusters data
+        try:
+            clusters_df = get_parquet_from_minio('latest/games_clusters_latest.parquet', bucket=CLUSTERS_BUCKET)
+            if clusters_df is None:
+                return jsonify({'error': 'No clustering data available'}), 404
+        except Exception as e:
+            logger.error(f"Error loading clusters data: {e}")
+            return jsonify({'error': 'Failed to load clustering data'}), 500
+        
+        # Find the reference game
+        reference_game = clusters_df[clusters_df['app_id'] == game_id]
+        if reference_game.empty:
+            return jsonify({'error': f'Game with ID {game_id} not found'}), 404
+        
+        reference_cluster = reference_game.iloc[0]['cluster']
+        
+        # Get recommendation candidates
+        if same_cluster_only:
+            candidates = clusters_df[
+                (clusters_df['cluster'] == reference_cluster) & 
+                (clusters_df['app_id'] != game_id)
+            ]
+        else:
+            candidates = clusters_df[clusters_df['app_id'] != game_id]
+        
+        if candidates.empty:
+            return jsonify({'recommendations': [], 'reference_game': reference_game.iloc[0].to_dict()})
+        
+        # Score recommendations based on similarity
+        ref_price = reference_game.iloc[0]['price_final']
+        ref_rating = reference_game.iloc[0]['positive_ratio']
+        ref_reviews = reference_game.iloc[0]['user_reviews']
+        
+        # Calculate similarity scores
+        candidates = candidates.copy()
+        candidates['price_similarity'] = 1 - abs(candidates['price_final'] - ref_price) / max(candidates['price_final'].max(), ref_price, 1)
+        candidates['rating_similarity'] = 1 - abs(candidates['positive_ratio'] - ref_rating) / 100
+        candidates['popularity_factor'] = (candidates['user_reviews'] + 1).apply(lambda x: min(x / (ref_reviews + 1), 2))
+        
+        # Combined similarity score
+        candidates['similarity_score'] = (
+            candidates['price_similarity'] * 0.3 +
+            candidates['rating_similarity'] * 0.4 +
+            candidates['popularity_factor'] * 0.3
+        )
+        
+        # Sort by similarity and get top recommendations
+        recommendations = candidates.nlargest(limit, 'similarity_score')
+        
+        # Prepare response
+        rec_list = []
+        for _, game in recommendations.iterrows():
+            rec_list.append({
+                'app_id': int(game['app_id']),
+                'title': game['title'],
+                'rating': game['rating'],
+                'positive_ratio': int(game['positive_ratio']),
+                'user_reviews': int(game['user_reviews']),
+                'price_final': float(game['price_final']),
+                'cluster': int(game['cluster']),
+                'similarity_score': float(game['similarity_score'])
+            })
+        
+        response = {
+            'recommendations': rec_list,
+            'reference_game': {
+                'app_id': int(reference_game.iloc[0]['app_id']),
+                'title': reference_game.iloc[0]['title'],
+                'cluster': int(reference_game.iloc[0]['cluster']),
+                'rating': reference_game.iloc[0]['rating'],
+                'positive_ratio': int(reference_game.iloc[0]['positive_ratio']),
+                'price_final': float(reference_game.iloc[0]['price_final'])
+            },
+            'parameters': {
+                'same_cluster_only': same_cluster_only,
+                'limit': limit,
+                'reference_cluster': int(reference_cluster)
+            },
+            'timestamp': datetime.now().isoformat()
+        }
+        
+        return jsonify(response)
+        
+    except Exception as e:
+        logger.error(f"Error getting recommendations: {e}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/clustering/status', methods=['GET'])
+def get_clustering_status():
+    """Get status of clustering system"""
+    try:
+        status = {
+            'timestamp': datetime.now().isoformat(),
+            'clustering_status': 'unknown',
+            'latest_clusters': None,
+            'latest_analysis': None,
+            'data_freshness': {}
+        }
+        
+        # Check if clusters bucket exists
+        try:
+            if not client.bucket_exists(CLUSTERS_BUCKET):
+                status['clustering_status'] = 'no_data'
+                status['message'] = 'Clusters bucket does not exist'
+                return jsonify(status)
+        except Exception as e:
+            status['clustering_status'] = 'error'
+            status['error'] = str(e)
+            return jsonify(status)
+        
+        # Check latest clusters data
+        try:
+            objects = list(client.list_objects(CLUSTERS_BUCKET, prefix='latest/', recursive=True))
+            
+            latest_clusters_obj = None
+            latest_analysis_obj = None
+            
+            for obj in objects:
+                if obj.object_name.endswith('games_clusters_latest.parquet'):
+                    latest_clusters_obj = obj
+                elif obj.object_name.endswith('cluster_analysis_latest.json'):
+                    latest_analysis_obj = obj
+            
+            if latest_clusters_obj:
+                status['latest_clusters'] = {
+                    'file': latest_clusters_obj.object_name,
+                    'last_modified': latest_clusters_obj.last_modified.isoformat(),
+                    'size': latest_clusters_obj.size
+                }
+                
+                # Check data freshness - be more tolerant for real-time systems
+                time_diff = datetime.now() - latest_clusters_obj.last_modified.replace(tzinfo=None)
+                status['data_freshness']['clusters'] = {
+                    'hours_old': time_diff.total_seconds() / 3600,
+                    'minutes_old': time_diff.total_seconds() / 60,
+                    'is_fresh': time_diff < timedelta(hours=12),  # Increased from 6 to 12 hours
+                    'is_very_fresh': time_diff < timedelta(minutes=10),  # Added very fresh indicator
+                    'last_update': latest_clusters_obj.last_modified.isoformat()
+                }
+            
+            if latest_analysis_obj:
+                status['latest_analysis'] = {
+                    'file': latest_analysis_obj.object_name,
+                    'last_modified': latest_analysis_obj.last_modified.isoformat(),
+                    'size': latest_analysis_obj.size
+                }
+        
+        except Exception as e:
+            status['clustering_status'] = 'error'
+            status['error'] = f'Error checking latest data: {str(e)}'
+            return jsonify(status)
+        
+        # Determine overall status
+        if status['latest_clusters'] and status['latest_analysis']:
+            if status['data_freshness'].get('clusters', {}).get('is_fresh', False):
+                status['clustering_status'] = 'healthy'
+            else:
+                status['clustering_status'] = 'stale'
+        else:
+            status['clustering_status'] = 'no_data'
+        
+        return jsonify(status)
+        
+    except Exception as e:
+        logger.error(f"Error getting clustering status: {e}")
+        return jsonify({'error': str(e)}), 500
+
 if __name__ == '__main__':
     logger.info("🚀 Starting Gaming Analytics API with Advanced Sentiment Analysis")
     logger.info(f"📊 Sentiment Analysis: {'Advanced NLP' if SENTIMENT_ANALYZER_AVAILABLE else 'Basic Fallback'}")
-    app.run(debug=True, host='0.0.0.0', port=5000) 
+    # Production mode untuk stabilitas dalam orchestrator
+    app.run(debug=False, host='0.0.0.0', port=5000, threaded=True) 
