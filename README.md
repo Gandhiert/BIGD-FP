@@ -8,8 +8,9 @@
 
 **Enterprise-grade Data Lakehouse platform untuk analisis gaming data dengan real-time streaming capabilities dan advanced machine learning analytics.**
 
-## 👥 Anggota Kelompok
+## Laporan Pengerjaan
 
+## 👥 Anggota Kelompok
 |             Nama              |     NRP    |
 |-------------------------------|------------|
 | M Abhinaya Al Faruqi        | 5027231011 |
